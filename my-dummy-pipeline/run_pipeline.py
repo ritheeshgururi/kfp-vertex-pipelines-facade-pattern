@@ -40,6 +40,7 @@ taskthree = builder.add_step(
         'input_1': tasktwo.outputs['output_string'],
         'input_2': tasktwo.outputs['output_number']
     },
+    base_image = 'python:3.11',
     packages_to_install = ['kfp'],
 )
 
