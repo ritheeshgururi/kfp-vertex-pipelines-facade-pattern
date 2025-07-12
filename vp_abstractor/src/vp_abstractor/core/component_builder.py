@@ -1,7 +1,7 @@
 """
 This module dynamically creates KFP components from user-provided python scripts.
 """
-from typing import List, Any, Callable
+from typing import List, Any, Callable, Optional
 
 from kfp import dsl
 from kfp.dsl import PipelineTask
@@ -44,7 +44,7 @@ class ComponentCreator:
     def create_from_function(
         step_function: Callable[..., Any],
         base_image: str = 'python:3.10-slim-bookworm',
-        packages_to_install: List[str] = None
+        packages_to_install: Optional[List[str]] = None
     ) -> CustomComponent:
         """
         Takes a user-provided function with KFP type annotations and applies the @dsl.component decorator to it.

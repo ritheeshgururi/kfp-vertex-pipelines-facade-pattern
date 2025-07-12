@@ -4,15 +4,17 @@ class PipelineConfig:
 
     PIPELINE_ROOT = 'gs://vertex-pipeline-root-training'
     PIPELINE_NAME = 'my-dummy-pipeline'
-    DESCRIPTION = 'My dummy pipeline.'
+    DESCRIPTION = '.'
     enable_caching = False
     wait_for_completion = True
 
 class TaskNames:
-    task_one = 'task-1'
-    task_two = 'task-2'
-    task_three = 'task-3'
-    task_four = 'task-4'
+    task_one = 'component-1'
+    task_two = 'component-2'
+    task_three = 'component-3'
+    task_four_true = 'component-4-true'
+    task_four_false = 'component-4-false'
+
 
 class Dependencies:
     task_one = [
