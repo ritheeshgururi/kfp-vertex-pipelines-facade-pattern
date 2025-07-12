@@ -14,6 +14,10 @@ def build_pipeline():
         description = config.PipelineConfig.DESCRIPTION
     )
 
+    builder.add_email_notification_on_exit(
+        recipients = config.PipelineConfig.EMAIL_NOTIFICATION_RECIPIENTS
+    )
+
     taskone = builder.add_step(
         name = config.TaskNames.task_one,
         step_type = ComponentType.CUSTOM,
@@ -31,7 +35,10 @@ def build_pipeline():
         packages_to_install = config.Dependencies.task_two
     )
 
-    with builder.condition(tasktwo.outputs['flag_output'], '==', 'True', name = 'Flag condition True'):
+    with builder.condition(
+        tasktwo.outputs['flag_output'], '==', 'True',
+        name = 'Flag condition True'
+    ):
         taskthree = builder.add_step(
             name = config.TaskNames.task_three,
             step_type = ComponentType.CUSTOM,
@@ -51,8 +58,11 @@ def build_pipeline():
             after = [taskthree]
         )
 
-    with builder.condition(tasktwo.outputs['flag_output'], '==', 'False', name = 'Flag condition False'):
-        taskfour_true = builder.add_step(
+    with builder.condition(
+        tasktwo.outputs['flag_output'], '==', 'False',
+        name = 'Flag condition False'
+    ):
+        taskfour_false = builder.add_step(
             name = config.TaskNames.task_four_false,
             step_type = ComponentType.CUSTOM,
             step_function = task4

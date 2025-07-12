@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 from contextlib import contextmanager
 import re
 from kfp import dsl
+from google_cloud_pipeline_components.v1.vertex_notification_email import VertexNotificationEmailOp
 
 from .component_builder import ComponentCreator
 from ..components import model_upload_step, batch_prediction_step
@@ -65,16 +66,16 @@ class _ConditionGroup:
     """[Internal] Represents an if block in the pipeline graph."""
     def __init__(
             self,
-            operand1: Any,
-            op: str,
-            operand2: Any,
+            lhs_operand: Any,
+            operation: str,
+            rhs_operand: Any,
             name: Optional[str] = None
     ):
-        if op not in ['==', '!=', '>', '<', '>=', '<=']:
-            raise ValueError(f"Unsupported operator '{op}'. Use one of '==', '!=', '>', '<', '>=', '<='.")
-        self.operand1 = operand1
-        self.op = op
-        self.operand2 = operand2
+        if operation not in ['==', '!=', '>', '<', '>=', '<=']:
+            raise ValueError(f"Unsupported operator '{operation}'. Use one of '==', '!=', '>', '<', '>=', '<='.")
+        self.lhs_operand = lhs_operand
+        self.operation = operation
+        self.rhs_operand = rhs_operand
         self.name = name
         self.steps: List[Dict[str, Any]] = []
 
@@ -102,22 +103,40 @@ class PipelineBuilder:
         self.parameters = _PipelineParameters()
         self._pipeline_graph: List[Any] = [] 
         self._active_condition_group: Optional[_ConditionGroup] = None
+        self._exit_notification_recipients: Optional[List[str]] = None
+
+    def add_email_notification_on_exit(
+        self,
+        recipients: List[str]
+    ):
+        """
+        Sends an email notification to a list of recipients when the pipeline finishes if called.
+
+        Args:
+            recipients: A list of email address strings.
+        """
+        if self._exit_notification_recipients:
+            raise ValueError('Email notification exit handler has already been added for this pipeline.')
+        if not recipients:
+            raise ValueError('The list of email recipients cannot be empty.')
+            
+        self._exit_notification_recipients = recipients
 
     @contextmanager
-    def condition(self, operand1: Any, op: str, operand2: Any, name: Optional[str] = None):
+    def condition(self, lhs_operand: Any, operation: str, rhs_operand: Any, name: Optional[str] = None):
         """
         A context manager to define a conditional block of steps.
 
         Args:
-            operand1: The LHS of the comparison. Typically a placeholder from a previous task's output.
-            op: The comparison operator (e.g., '==', '!=').
-            operand2: The RHS of the comparison. Typically a static value (str, int, bool).
+            lhs_operand: The LHS of the comparison. Typically a placeholder from a previous task's output.
+            operation: The comparison operator (e.g., '==', '!=').
+            rhs_operand: The RHS of the comparison. Typically a static value (str, int, bool).
             name: The name of the group. Used as display name in UI.
         """
         if self._active_condition_group:
             raise NotImplementedError('Nested conditional blocks are not supported.')
 
-        condition_group = _ConditionGroup(operand1, op, operand2, name = name)
+        condition_group = _ConditionGroup(lhs_operand, operation, rhs_operand, name = name)
         self._pipeline_graph.append(condition_group)
         self._active_condition_group = condition_group
         
@@ -228,7 +247,7 @@ class PipelineBuilder:
         runtime_parameters: Dict[str, Any]
     ):
         """
-        [Internal] Translates the abstract pipeline definition into a concrete, callable KFP pipeline function.
+        [Internal] Translates the user pipeline definition into a callable KFP pipeline function.
         Called by the PipelineRunner.
         """
         @dsl.pipeline(name = self.pipeline_name, description = self.description)
@@ -236,47 +255,59 @@ class PipelineBuilder:
             project_id: str,
             location: str
         ):
-            pipeline_tasks: Dict[str, dsl.PipelineTask] = {}
+            def define_main_pipeline():
+                pipeline_tasks: Dict[str, dsl.PipelineTask] = {}
 
-            op_map = {'==': operator.eq, '!=': operator.ne, '>': operator.gt, '<': operator.lt, '>=': operator.ge, '<=': operator.le}
+                operator_map = {'==': operator.eq, '!=': operator.ne, '>': operator.gt, '<': operator.lt, '>=': operator.ge, '<=': operator.le}
 
-            def _process_graph_level(graph_level: List[Any]):
-                for task_group in graph_level:
-                    if isinstance(task_group, dict):
-                        step_definition = task_group
-                        step_name = step_definition['name']
-                        step_obj = self._get_step_object(step_definition)
+                def _process_graph_level(graph_level: List[Any]):
+                    for task_group in graph_level:
+                        if isinstance(task_group, dict):
+                            step_definition = task_group
+                            step_name = step_definition['name']
+                            step_obj = self._get_step_object(step_definition)
 
-                        resolved_inputs = {}
-                        for key, value in step_definition['inputs'].items():
-                            resolved_value = self._resolve_placeholders(value, pipeline_tasks, runtime_parameters)
-                            resolved_inputs[key] = resolved_value
+                            resolved_inputs = {}
+                            for key, value in step_definition['inputs'].items():
+                                resolved_value = self._resolve_placeholders(value, pipeline_tasks, runtime_parameters)
+                                resolved_inputs[key] = resolved_value
+                            
+                            if step_definition['step_type'] != ComponentType.CUSTOM:
+                                resolved_inputs['project'] = project_id
+                                resolved_inputs['location'] = location
+                            
+                            pipeline_task = step_obj.execute(**resolved_inputs)
+                            pipeline_task.set_display_name(step_name)
+                            pipeline_tasks[step_name] = pipeline_task
+
+                            for dep_task in step_definition['after']:
+                                pipeline_task.after(pipeline_tasks[dep_task.name])
                         
-                        if step_definition['step_type'] != ComponentType.CUSTOM:
-                           resolved_inputs['project'] = project_id
-                           resolved_inputs['location'] = location
-                        
-                        pipeline_task = step_obj.execute(**resolved_inputs)
-                        pipeline_task.set_display_name(step_name)
-                        pipeline_tasks[step_name] = pipeline_task
+                        elif isinstance(task_group, _ConditionGroup):
+                            condition_group = task_group
+                            
+                            resolved_lhs_operand = self._resolve_placeholders(
+                                condition_group.lhs_operand, pipeline_tasks, runtime_parameters
+                            )
 
-                        for dep_task in step_definition['after']:
-                            pipeline_task.after(pipeline_tasks[dep_task.name])
-                    
-                    elif isinstance(task_group, _ConditionGroup):
-                        condition_group = task_group
-                        
-                        resolved_operand1 = self._resolve_placeholders(
-                            condition_group.operand1, pipeline_tasks, runtime_parameters
-                        )
+                            op_function = operator_map[condition_group.operation]
 
-                        op_func = op_map[condition_group.op]
+                            kfp_condition = op_function(resolved_lhs_operand, condition_group.rhs_operand)
 
-                        kfp_condition = op_func(resolved_operand1, condition_group.operand2)
+                            with dsl.If(kfp_condition, name = condition_group.name):
+                                _process_graph_level(condition_group.steps)
 
-                        with dsl.If(kfp_condition, name = condition_group.name):
-                            _process_graph_level(condition_group.steps)
+                _process_graph_level(self._pipeline_graph)
 
-            _process_graph_level(self._pipeline_graph)
+            if self._exit_notification_recipients:
+                with dsl.ExitHandler(
+                    exit_task = VertexNotificationEmailOp(
+                        recipients = self._exit_notification_recipients
+                    ), 
+                    name = 'Email Notification'
+                ):
+                    define_main_pipeline()
+            else:
+                define_main_pipeline()
 
         return generated_pipeline_function

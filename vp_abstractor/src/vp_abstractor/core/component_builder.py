@@ -63,7 +63,7 @@ class ComponentCreator:
         kfp_component = dsl.component(
             func = step_function,
             base_image = base_image,
-            packages_to_install = packages_to_install,
+            packages_to_install = packages_to_install or [],
         )
 
         return CustomComponent(kfp_component_function = kfp_component)

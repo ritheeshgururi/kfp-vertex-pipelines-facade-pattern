@@ -7,6 +7,10 @@ class PipelineConfig:
     DESCRIPTION = '.'
     enable_caching = False
     wait_for_completion = True
+    EMAIL_NOTIFICATION_RECIPIENTS = [
+        'ritheeshgururi187@gmail.com',
+        'gurugulapudi2024@gmail.com'
+    ]
 
 class TaskNames:
     task_one = 'component-1'
