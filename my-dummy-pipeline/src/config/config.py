@@ -11,6 +11,7 @@ class PipelineConfig:
         'ritheeshgururi187@gmail.com',
         'gurugulapudi2024@gmail.com'
     ]
+    SERVICE_ACCOUNT = 'gcp-vertexai-mlops-blueprint@gcp-vertexai-mlops-blueprint.iam.gserviceaccount.com'
 
 class TaskNames:
     task_one = 'component-1'
@@ -39,3 +40,9 @@ class BaseImages:
     task_two = 'python:3.11'
     task_three = 'python:3.11'
     task_four = 'python:3.11'
+
+class ComputeResources:
+    task_one = 'e2-standard-4'
+    task_two = 'e2-standard-4'
+    task_three = 'e2-standard-4'
+    task_four = 'e2-standard-4'

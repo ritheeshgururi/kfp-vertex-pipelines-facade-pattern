@@ -23,7 +23,7 @@ class CustomComponent:
         Args:
             kfp_component_function: The actual callable KFP component function.
         """
-        self._kfp_component_function = kfp_component_function
+        self.kfp_component_function = kfp_component_function
 
     def execute(
         self,
@@ -33,7 +33,7 @@ class CustomComponent:
         Executes the underlying KFP component function, creating
         a step (PipelineTask) in the pipeline graph.
         """
-        return self._kfp_component_function(**kwargs)
+        return self.kfp_component_function(**kwargs)
 
 
 class ComponentCreator:

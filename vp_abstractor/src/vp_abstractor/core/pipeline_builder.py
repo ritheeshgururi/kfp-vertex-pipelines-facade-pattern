@@ -1,9 +1,8 @@
 """
 This module contains the primary user-facing API for constructing pipelines:
-- Task: A lightweight reference to a step within the pipeline.
-- PipelineBuilder: The main class for defining a pipeline and its steps. It
-  acts as a high-level interface for users to draw their pipeline graph
-  without writing any KFP DSL code.
+- Task: A reference to a step within the pipeline.
+- PipelineBuilder: The main class for defining a pipeline with its steps.
+  It is a high-level interface for users to build a pipeline graph without writing any KFP DSL code.
 """
 import operator
 
@@ -13,8 +12,9 @@ from contextlib import contextmanager
 import re
 from kfp import dsl
 from google_cloud_pipeline_components.v1.vertex_notification_email import VertexNotificationEmailOp
+from google_cloud_pipeline_components.v1.custom_job import create_custom_training_job_from_component
 
-from .component_builder import ComponentCreator
+from .component_builder import ComponentCreator, CustomComponent
 from ..components import model_upload_step, batch_prediction_step
 
 from ..utils.enums import ComponentType
@@ -31,8 +31,7 @@ class _Placeholder:
 
 class _TaskOutputs:
     """
-    [Internal] A dictionary-like object that generates placeholders for a Task's outputs.
-    This enables the user to write `step1_task.outputs["output_name"]`.
+    [Internal] A dictionary-like object that generates placeholders for a Task's outputs. This enables the user to write `step1_task.outputs['output_name']`.
     """    
     def __init__(self, task_name: str):
         self._task_name = task_name
@@ -44,8 +43,7 @@ class _TaskOutputs:
 
 class Task:
     """
-    A public-facing reference to a step that has been added to the PipelineBuilder.
-    Users receive this object from `PipelineBuilder.add_step()` 
+    The user facing reference to a step added to the PipelineBuilder. This object is recieved from `PipelineBuilder.add_step()` 
     """    
     def __init__(self, name: str):
         self.name = name
@@ -56,8 +54,7 @@ class Task:
 
 class _PipelineParameters:
     """
-    [Internal] A dictionary-like object that generates placeholders for runtime parameters.
-    This enables the user to write `builder.parameters["pipeline_parameter"]`.
+    [Internal] A dictionary-like object that generates placeholders for runtime parameters. This enables users to write `builder.parameters['pipeline_parameter']`.
     """
     def __getitem__(self, key: str) -> _Placeholder:
         return _Placeholder(f'{{{{params.{key}}}}}')
@@ -81,7 +78,7 @@ class _ConditionGroup:
 
 class PipelineBuilder:
     """
-    User facig API for programmatically defining a Vertex pipeline graph.
+    User facig API for programmatically defining a Vertex Pipeline graph.
     """    
     def __init__(
         self,
@@ -110,7 +107,7 @@ class PipelineBuilder:
         recipients: List[str]
     ):
         """
-        Sends an email notification to a list of recipients when the pipeline finishes if called.
+        Sends an email notification to a list of recipients when the pipeline finishes if called on the PipelineBuilder.
 
         Args:
             recipients: A list of email address strings.
@@ -129,7 +126,7 @@ class PipelineBuilder:
 
         Args:
             lhs_operand: The LHS of the comparison. Typically a placeholder from a previous task's output.
-            operation: The comparison operator (e.g., '==', '!=').
+            operation: The comparison operator ('==', '!=', etc).
             rhs_operand: The RHS of the comparison. Typically a static value (str, int, bool).
             name: The name of the group. Used as display name in UI.
         """
@@ -152,6 +149,7 @@ class PipelineBuilder:
         step_function: Optional[Callable[..., Any]] = None,
         inputs: Optional[Dict[str, Any]] = None,
         after: Optional[List[Task]] = None,
+        custom_job_spec: Optional[Dict[str, Any]] = None,
         **kwargs: Any
     ) -> Task:
         """
@@ -160,16 +158,13 @@ class PipelineBuilder:
         Args:
             name: A unique name for the step.
             step_type: The type of step to add, from the ComponentType enum.
-            inputs: A dictionary of inputs for the step. Values can be static
-                    or placeholders from `builder.parameters` or other `Task.outputs`.
-            after: A list of Task objects to enforce execution order for steps
-                   that do not have a direct data dependency.
-            **kwargs: Additional arguments specific to the component type.
-                      KFP component arguments can be passed here for ComponentType.CUSTOM steps.
+            inputs: A dictionary of inputs for the step. Values can be static or placeholders from `builder.parameters` or other `Task.outputs`.
+            after: A list of Task objects to enforce execution order for steps that do not have a direct data dependency.
+            custom_job_spec: A **kwargs like dictionary unpacker, with arguments to be passed to the `create_custom_training_job_from_component` wrapper method from Google Cloud Pipeline Component's CustomJob API. Only use if you want to convert your KFP components into Vertex AI Custom Training Jobs, to access parameters like `machine_type` and `service_account`. The `'display_name'` key will be mapped to the `name` argument by default. If specified otherwise, `name` will be overriden for the Custom Training Job. To see all valid keys, see their official SDK reference - [Google Cloud Pipeline Components - CustomJob](https://google-cloud-pipeline-components.readthedocs.io/en/google-cloud-pipeline-components-2.20.0/api/v1/custom_job.html#v1.custom_job.create_custom_training_job_from_component)
+            **kwargs: Additional arguments specific to the component type. KFP component arguments can be passed here for ComponentType.CUSTOM steps.
 
         Returns:
-            A Task object representing this step, which can be used to define
-            dependencies for subsequent steps.
+            A Task object representing this step, which can be used to define dependencies for subsequent steps.
         """        
         all_step_names = [s['name'] for s in self._pipeline_graph if isinstance(s, dict)] + [s['name'] for g in self._pipeline_graph if isinstance(g, _ConditionGroup) for s in g.steps]
         if name in all_step_names:
@@ -181,6 +176,7 @@ class PipelineBuilder:
             'step_function': step_function,
             'inputs': inputs or {},
             'after': after or [],
+            'custom_job_spec': custom_job_spec,
             'kwargs': kwargs
         }
         if self._active_condition_group:
@@ -194,25 +190,40 @@ class PipelineBuilder:
         self,
         step_definition: Dict[str, Any]
     ):
-        """Creates KFP component objects using the component builder."""
+        """Creates KFP component objects using the component builder. Wraps them into Vertex AI Custom Jobs if `custom_job_spec` is specified."""
         step_type = step_definition['step_type']
-        kwargs = step_definition["kwargs"]
+        kwargs = step_definition['kwargs']
 
         if step_type == ComponentType.CUSTOM:
             if not step_definition['step_function']:
-                raise ValueError('step_function` must be provided for CUSTOM steps.')
-            step_object = ComponentCreator.create_from_function(
+                raise ValueError('step_function must be provided for CUSTOM steps.')
+            
+            kfp_component_object = ComponentCreator.create_from_function(
                 step_function = step_definition['step_function'],
                 **kwargs
             )
+            custom_job_spec = step_definition.get('custom_job_spec')
+            if custom_job_spec:
+                vertex_custom_job_kwargs = {
+                    'display_name': step_definition['name'],
+                    **custom_job_spec 
+                }
+
+                vertex_custom_job_wrapper = create_custom_training_job_from_component(
+                    component_spec = kfp_component_object.kfp_component_function,
+                    **vertex_custom_job_kwargs
+                )
+                
+                return CustomComponent(kfp_component_function = vertex_custom_job_wrapper)
+
+            else:
+                return kfp_component_object
         # elif step_type == ComponentType.MODEL_UPLOAD:
         #     step_object = model_upload_step.ModelUploadStep(**kwargs)
         # elif step_type == ComponentType.BATCH_PREDICT:
         #     step_object = batch_prediction_step.BatchPredictionStep(**kwargs)
         else:
             raise NotImplementedError(f"Invalid step type '{step_type}' received.")
-
-        return step_object
 
     def _resolve_placeholders(
         self,

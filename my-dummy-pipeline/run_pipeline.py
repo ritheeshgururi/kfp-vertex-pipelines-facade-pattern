@@ -32,7 +32,11 @@ def build_pipeline():
         inputs = {
             'input_1': taskone.outputs['task1_outputs']
         },
-        packages_to_install = config.Dependencies.task_two
+        packages_to_install = config.Dependencies.task_two,
+        custom_job_spec = {
+            'display_name': config.TaskNames.task_two,
+            'service_account': config.PipelineConfig.SERVICE_ACCOUNT
+        }
     )
 
     with builder.condition(
@@ -55,7 +59,11 @@ def build_pipeline():
             name = config.TaskNames.task_four_true,
             step_type = ComponentType.CUSTOM,
             step_function = task4,
-            after = [taskthree]
+            after = [taskthree],
+            custom_job_spec = {
+                'machine_type': config.ComputeResources.task_four,
+                'service_account': config.PipelineConfig.SERVICE_ACCOUNT
+            }
         )
 
     with builder.condition(
@@ -81,7 +89,8 @@ def main():
 
     runner.run(
         pipeline_builder = builder,
-        wait = config.PipelineConfig.wait_for_completion
+        wait = config.PipelineConfig.wait_for_completion,
+        service_account = config.PipelineConfig.SERVICE_ACCOUNT
     )
 
 if __name__ == '__main__':
