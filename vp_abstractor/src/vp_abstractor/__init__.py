@@ -5,6 +5,7 @@ import importlib.metadata
 
 from .core.pipeline_builder import PipelineBuilder, Task
 from .core.runner import PipelineRunner
+from .core.image_builder import CustomImageConfig
 # from .serving.container_builder import ServingContainerBuilder
 from .utils.enums import ComponentType
 
@@ -14,10 +15,11 @@ except:
     __version__ = 'dev'
 
 __all__ = [
-    "PipelineBuilder",
-    "Task",
-    "PipelineRunner",
-    # "ServingContainerBuilder",
-    "ComponentType",
-    "__version__",
+    'PipelineBuilder',
+    'Task',
+    'PipelineRunner',
+    # 'ServingContainerBuilder',
+    'ComponentType',
+    'CustomImageConfig',
+    '__version__',
 ]

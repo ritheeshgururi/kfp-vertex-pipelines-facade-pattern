@@ -62,11 +62,11 @@ class _PipelineParameters:
 class _ConditionGroup:
     """[Internal] Represents an if block in the pipeline graph."""
     def __init__(
-            self,
-            lhs_operand: Any,
-            operation: str,
-            rhs_operand: Any,
-            name: Optional[str] = None
+        self,
+        lhs_operand: Any,
+        operation: str,
+        rhs_operand: Any,
+        name: Optional[str] = None
     ):
         if operation not in ['==', '!=', '>', '<', '>=', '<=']:
             raise ValueError(f"Unsupported operator '{operation}'. Use one of '==', '!=', '>', '<', '>=', '<='.")
@@ -120,7 +120,13 @@ class PipelineBuilder:
         self._exit_notification_recipients = recipients
 
     @contextmanager
-    def condition(self, lhs_operand: Any, operation: str, rhs_operand: Any, name: Optional[str] = None):
+    def condition(
+        self,
+        lhs_operand: Any,
+        operation: str,
+        rhs_operand: Any,
+        name: Optional[str] = None
+    ):
         """
         A context manager to define a conditional block of steps.
 
@@ -161,7 +167,8 @@ class PipelineBuilder:
             inputs: A dictionary of inputs for the step. Values can be static or placeholders from `builder.parameters` or other `Task.outputs`.
             after: A list of Task objects to enforce execution order for steps that do not have a direct data dependency.
             custom_job_spec: A **kwargs like dictionary unpacker, with arguments to be passed to the `create_custom_training_job_from_component` wrapper method from Google Cloud Pipeline Component's CustomJob API. Only use if you want to convert your KFP components into Vertex AI Custom Training Jobs, to access parameters like `machine_type` and `service_account`. The `'display_name'` key will be mapped to the `name` argument by default. If specified otherwise, `name` will be overriden for the Custom Training Job. To see all valid keys, see their official SDK reference - [Google Cloud Pipeline Components - CustomJob](https://google-cloud-pipeline-components.readthedocs.io/en/google-cloud-pipeline-components-2.20.0/api/v1/custom_job.html#v1.custom_job.create_custom_training_job_from_component)
-            **kwargs: Additional arguments specific to the component type. KFP component arguments can be passed here for ComponentType.CUSTOM steps.
+            **kwargs: Additional arguments specific to the component type. KFP component arguments can be passed here for ComponentType.CUSTOM steps. To see all valid additional arguments, see KFP's official SDK reference documentation - [kfp.dsl.component()](https://kubeflow-pipelines.readthedocs.io/en/sdk-2.13.0/source/dsl.html#kfp.dsl.component).
+            Note: Pipeline step base images in the vp_abstractor framework follow a three level precedence hierarchy. A `base_image` **kwargs argument passed to the `PipelineBuilder.add_step()` method is given first priority. The base image generated using the `CustomImageConfig` configuration passed to the PipelineRunner comes next. This custom base image will be overriden for a particular step, if the `base_image` argument is passed to its `add_step()` method. If neither of these two are specified, the default KFP base image (currently python:3.9) will be used.
 
         Returns:
             A Task object representing this step, which can be used to define dependencies for subsequent steps.
@@ -188,7 +195,8 @@ class PipelineBuilder:
     
     def _get_step_object(
         self,
-        step_definition: Dict[str, Any]
+        step_definition: Dict[str, Any],
+        common_base_image: Optional[str] = None
     ):
         """Creates KFP component objects using the component builder. Wraps them into Vertex AI Custom Jobs if `custom_job_spec` is specified."""
         step_type = step_definition['step_type']
@@ -197,6 +205,9 @@ class PipelineBuilder:
         if step_type == ComponentType.CUSTOM:
             if not step_definition['step_function']:
                 raise ValueError('step_function must be provided for CUSTOM steps.')
+            
+            if 'base_image' not in kwargs and common_base_image:
+                kwargs['base_image'] = common_base_image
             
             kfp_component_object = ComponentCreator.create_from_function(
                 step_function = step_definition['step_function'],
@@ -255,7 +266,8 @@ class PipelineBuilder:
 
     def _build_kfp_pipeline(
         self,
-        runtime_parameters: Dict[str, Any]
+        runtime_parameters: Dict[str, Any],
+        common_base_image: Optional[str] = None
     ):
         """
         [Internal] Translates the user pipeline definition into a callable KFP pipeline function.
@@ -271,12 +283,15 @@ class PipelineBuilder:
 
                 operator_map = {'==': operator.eq, '!=': operator.ne, '>': operator.gt, '<': operator.lt, '>=': operator.ge, '<=': operator.le}
 
-                def _process_graph_level(graph_level: List[Any]):
+                def _process_graph_level(
+                    graph_level: List[Any],
+                    global_base_image: Optional[str] = None
+                ):
                     for task_group in graph_level:
                         if isinstance(task_group, dict):
                             step_definition = task_group
                             step_name = step_definition['name']
-                            step_obj = self._get_step_object(step_definition)
+                            step_obj = self._get_step_object(step_definition, common_base_image)
 
                             resolved_inputs = {}
                             for key, value in step_definition['inputs'].items():
@@ -306,9 +321,9 @@ class PipelineBuilder:
                             kfp_condition = op_function(resolved_lhs_operand, condition_group.rhs_operand)
 
                             with dsl.If(kfp_condition, name = condition_group.name):
-                                _process_graph_level(condition_group.steps)
+                                _process_graph_level(condition_group.steps, global_base_image)
 
-                _process_graph_level(self._pipeline_graph)
+                _process_graph_level(self._pipeline_graph, common_base_image)
 
             if self._exit_notification_recipients:
                 with dsl.ExitHandler(

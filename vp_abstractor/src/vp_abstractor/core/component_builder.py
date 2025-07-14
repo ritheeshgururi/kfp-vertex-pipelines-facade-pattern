@@ -1,7 +1,7 @@
 """
 This module dynamically creates KFP components from user-provided python scripts.
 """
-from typing import List, Any, Callable, Optional
+from typing import Any, Callable
 
 from kfp import dsl
 from kfp.dsl import PipelineTask
@@ -10,8 +10,7 @@ class CustomComponent:
     """
     A wrapper around a dynamically generated KFP component.
 
-    This class holds the KFP component function created from a user's script
-    and provides a consistent `execute` method for the PipelineBuilder to call.
+    This class holds the KFP component function created from a user's script and provides a consistent `execute` method for the PipelineBuilder to call.
     """
     def __init__(
         self,
@@ -30,8 +29,7 @@ class CustomComponent:
         **kwargs: Any
     ) -> PipelineTask:
         """
-        Executes the underlying KFP component function, creating
-        a step (PipelineTask) in the pipeline graph.
+        Executes the underlying KFP component function, creating a step (PipelineTask) in the pipeline graph.
         """
         return self.kfp_component_function(**kwargs)
 
@@ -43,8 +41,7 @@ class ComponentCreator:
     @staticmethod
     def create_from_function(
         step_function: Callable[..., Any],
-        base_image: str = 'python:3.10-slim-bookworm',
-        packages_to_install: Optional[List[str]] = None
+        **kwargs: Any
     ) -> CustomComponent:
         """
         Takes a user-provided function with KFP type annotations and applies the @dsl.component decorator to it.
@@ -62,8 +59,7 @@ class ComponentCreator:
         
         kfp_component = dsl.component(
             func = step_function,
-            base_image = base_image,
-            packages_to_install = packages_to_install or [],
+            **kwargs
         )
 
         return CustomComponent(kfp_component_function = kfp_component)
