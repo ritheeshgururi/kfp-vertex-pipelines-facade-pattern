@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vp_abstractor"
-version = "0.7.0"
+version = "0.8.0"
 description = '.'
 requires-python = ">=3.8"
 dependencies = [
@@ -13,5 +13,6 @@ dependencies = [
     "google-cloud-storage>=2.19.0",
     "google-cloud-pipeline-components>=2.20.0",
     "google-auth>=2.38.0",
-    "docker>=7.1.0"
+    "docker>=7.1.0",
+    "google-cloud-monitoring>=2.20.0"
 ]

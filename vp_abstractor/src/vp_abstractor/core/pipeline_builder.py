@@ -16,6 +16,7 @@ from google_cloud_pipeline_components.v1.custom_job import create_custom_trainin
 
 from .component_builder import ComponentCreator, CustomComponent
 from ..components import model_upload_step, batch_prediction_step
+from ..components.custom_metric_monitorer_step import custom_metric_monitorer_step
 
 from ..utils.enums import ComponentType
 
@@ -102,7 +103,7 @@ class PipelineBuilder:
         self._active_condition_group: Optional[_ConditionGroup] = None
         self._exit_notification_recipients: Optional[List[str]] = None
 
-    def add_email_notification_on_exit(
+    def add_email_notification(
         self,
         recipients: List[str]
     ):
@@ -155,7 +156,8 @@ class PipelineBuilder:
         step_function: Optional[Callable[..., Any]] = None,
         inputs: Optional[Dict[str, Any]] = None,
         after: Optional[List[Task]] = None,
-        custom_job_spec: Optional[Dict[str, Any]] = None,
+        vertex_custom_job_spec: Optional[Dict[str, Any]] = None,
+        metric_metadata: Optional[Dict[str, str]] = None,
         **kwargs: Any
     ) -> Task:
         """
@@ -164,9 +166,10 @@ class PipelineBuilder:
         Args:
             name: A unique name for the step.
             step_type: The type of step to add, from the ComponentType enum.
-            inputs: A dictionary of inputs for the step. Values can be static or placeholders from `builder.parameters` or other `Task.outputs`.
-            after: A list of Task objects to enforce execution order for steps that do not have a direct data dependency.
-            custom_job_spec: A **kwargs like dictionary unpacker, with arguments to be passed to the `create_custom_training_job_from_component` wrapper method from Google Cloud Pipeline Component's CustomJob API. Only use if you want to convert your KFP components into Vertex AI Custom Training Jobs, to access parameters like `machine_type` and `service_account`. The `'display_name'` key will be mapped to the `name` argument by default. If specified otherwise, `name` will be overriden for the Custom Training Job. To see all valid keys, see their official SDK reference - [Google Cloud Pipeline Components - CustomJob](https://google-cloud-pipeline-components.readthedocs.io/en/google-cloud-pipeline-components-2.20.0/api/v1/custom_job.html#v1.custom_job.create_custom_training_job_from_component)
+            inputs: A dictionary of inputs for the step. Values can be literals or placeholders from `builder.parameters` or other `Task.outputs`.
+            after: A list of Task objects to force an execution order for steps that do not have a direct data dependency.
+            vertex_custom_job_spec: A **kwargs like dictionary unpacker, with arguments to be passed to the `create_custom_training_job_from_component` wrapper method from Google Cloud Pipeline Component's CustomJob API. Only use if you want to convert your KFP components into Vertex AI Custom Training Jobs, to access parameters like `machine_type` and `service_account`. The `'display_name'` key will be mapped to the `name` argument by default. If specified otherwise, `name` will be overriden for the Custom Training Job. To see all valid keys, see their official SDK reference - [Google Cloud Pipeline Components - CustomJob](https://google-cloud-pipeline-components.readthedocs.io/en/google-cloud-pipeline-components-2.20.0/api/v1/custom_job.html#v1.custom_job.create_custom_training_job_from_component)
+            metric_metadata: Required only for `ComponentType.CUSTOM_METRIC_MONITORER`. A dictionary of key-value pairs for filtering and visualization in Cloud Monitoring. The metric names in the returned dictionary are automatically added as a labels.
             **kwargs: Additional arguments specific to the component type. KFP component arguments can be passed here for ComponentType.CUSTOM steps. To see all valid additional arguments, see KFP's official SDK reference documentation - [kfp.dsl.component()](https://kubeflow-pipelines.readthedocs.io/en/sdk-2.13.0/source/dsl.html#kfp.dsl.component).
             Note: Pipeline step base images in the vp_abstractor framework follow a three level precedence hierarchy. A `base_image` **kwargs argument passed to the `PipelineBuilder.add_step()` method is given first priority. The base image generated using the `CustomImageConfig` configuration passed to the PipelineRunner comes next. This custom base image will be overriden for a particular step, if the `base_image` argument is passed to its `add_step()` method. If neither of these two are specified, the default KFP base image (currently python:3.9) will be used.
 
@@ -176,6 +179,10 @@ class PipelineBuilder:
         all_step_names = [s['name'] for s in self._pipeline_graph if isinstance(s, dict)] + [s['name'] for g in self._pipeline_graph if isinstance(g, _ConditionGroup) for s in g.steps]
         if name in all_step_names:
             raise ValueError(f"The step name '{name}' has been used multiple times.")
+        
+        if step_type == ComponentType.CUSTOM_METRIC_MONITORER:
+            if not metric_metadata:
+                raise ValueError('`metric_metadata` must be provided for METRIC_LOGGER steps.')
             
         step_definition = {
             'name': name,
@@ -183,7 +190,8 @@ class PipelineBuilder:
             'step_function': step_function,
             'inputs': inputs or {},
             'after': after or [],
-            'custom_job_spec': custom_job_spec,
+            'vertex_custom_job_spec': vertex_custom_job_spec,
+            'metric_metadata': metric_metadata,
             'kwargs': kwargs
         }
         if self._active_condition_group:
@@ -198,13 +206,13 @@ class PipelineBuilder:
         step_definition: Dict[str, Any],
         common_base_image: Optional[str] = None
     ):
-        """Creates KFP component objects using the component builder. Wraps them into Vertex AI Custom Jobs if `custom_job_spec` is specified."""
+        """Creates KFP component objects using the component builder. Wraps them into Vertex AI Custom Jobs if `vertex_custom_job_spec` is specified."""
         step_type = step_definition['step_type']
         kwargs = step_definition['kwargs']
 
-        if step_type == ComponentType.CUSTOM:
+        if step_type in [ComponentType.CUSTOM, ComponentType.CUSTOM_METRIC_MONITORER]:
             if not step_definition['step_function']:
-                raise ValueError('step_function must be provided for CUSTOM steps.')
+                raise ValueError(f'step_function must be provided for {step_type.value} steps.')
             
             if 'base_image' not in kwargs and common_base_image:
                 kwargs['base_image'] = common_base_image
@@ -213,11 +221,11 @@ class PipelineBuilder:
                 step_function = step_definition['step_function'],
                 **kwargs
             )
-            custom_job_spec = step_definition.get('custom_job_spec')
-            if custom_job_spec:
+            vertex_custom_job_spec = step_definition.get('vertex_custom_job_spec')
+            if vertex_custom_job_spec:
                 vertex_custom_job_kwargs = {
                     'display_name': step_definition['name'],
-                    **custom_job_spec 
+                    **vertex_custom_job_spec 
                 }
 
                 vertex_custom_job_wrapper = create_custom_training_job_from_component(
@@ -234,7 +242,7 @@ class PipelineBuilder:
         # elif step_type == ComponentType.BATCH_PREDICT:
         #     step_object = batch_prediction_step.BatchPredictionStep(**kwargs)
         else:
-            raise NotImplementedError(f"Invalid step type '{step_type}' received.")
+            raise NotImplementedError(f'Invalid step type {step_type} received.')
 
     def _resolve_placeholders(
         self,
@@ -252,7 +260,7 @@ class PipelineBuilder:
         if task_match:
             task_name, output_key = task_match.groups()
             if task_name not in pipeline_tasks:
-                raise ValueError(f"Step '{task_name}' not found.")
+                raise ValueError(f'Step {task_name} not found.')
             return pipeline_tasks[task_name].outputs[output_key]
 
         param_match = re.match(r'^{{params\.([\w-]+)}}$', placeholder_str)
@@ -298,13 +306,29 @@ class PipelineBuilder:
                                 resolved_value = self._resolve_placeholders(value, pipeline_tasks, runtime_parameters)
                                 resolved_inputs[key] = resolved_value
                             
-                            if step_definition['step_type'] != ComponentType.CUSTOM:
-                                resolved_inputs['project'] = project_id
-                                resolved_inputs['location'] = location
+                            # if step_definition['step_type'] not in [ComponentType.CUSTOM, ComponentType.CUSTOM_METRIC_MONITORER]:
+                            #     resolved_inputs['project'] = project_id
+                            #     resolved_inputs['location'] = location
                             
                             pipeline_task = step_obj.execute(**resolved_inputs)
                             pipeline_task.set_display_name(step_name)
                             pipeline_tasks[step_name] = pipeline_task
+
+                            if step_definition['step_type'] == ComponentType.CUSTOM_METRIC_MONITORER:
+                                print(f'Pairing custom metric monitorer with step: {step_name}')
+                                
+                                metric_dict_output = pipeline_task.output
+
+                                metric_type_name = f'custom.googleapis.com/{self.pipeline_name}/custom_metrics'
+                                print(f'Logging to pipeline-specific metric type: {metric_type_name}')
+
+                                custom_metric_monitorer_task = custom_metric_monitorer_step(
+                                    project_id = project_id,
+                                    metrics = metric_dict_output, #type: ignore
+                                    metadata = step_definition['metric_metadata'],
+                                    metric_type_name = metric_type_name
+                                )
+                                custom_metric_monitorer_task.set_display_name(f'{step_name}-monitorer') #type: ignore
 
                             for dep_task in step_definition['after']:
                                 pipeline_task.after(pipeline_tasks[dep_task.name])

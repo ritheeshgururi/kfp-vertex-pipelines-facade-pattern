@@ -10,3 +10,4 @@ class ComponentType(Enum):
     CUSTOM = auto()
     MODEL_UPLOAD = auto()
     BATCH_PREDICT = auto()
+    CUSTOM_METRIC_MONITORER = auto()
