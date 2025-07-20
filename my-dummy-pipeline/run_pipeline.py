@@ -1,12 +1,12 @@
-from vp_abstractor import PipelineBuilder, PipelineRunner, ComponentType, CustomImageConfig
-
-from src.tasks.data_drift_dummy import data_drift_dummy
 from src.tasks.task1 import task1
 from src.tasks.task2 import task2
 from src.tasks.task3 import task3
 from src.tasks.task4 import task4
+from src.tasks.data_drift_dummy import data_drift_dummy
 
 import config as config
+
+from vp_abstractor import PipelineBuilder, PipelineRunner, ComponentType, CustomImageConfig, ModelUploadConfig, BatchPredictionConfig
 
 def build_pipeline():
     builder = PipelineBuilder(
@@ -19,7 +19,7 @@ def build_pipeline():
         recipients = config.PipelineConfig.EMAIL_NOTIFICATION_RECIPIENTS
     )
 
-    taskone = builder.add_step(
+    stepone = builder.add_step(
         name = config.TaskNames.task_one,
         step_type = ComponentType.CUSTOM,
         step_function = task1,
@@ -30,37 +30,37 @@ def build_pipeline():
         }
     )
 
-    tasktwo = builder.add_step(
+    steptwo = builder.add_step(
         name = config.TaskNames.task_two,
         step_type = ComponentType.CUSTOM,
         step_function = task2,
         inputs = {
-            'input_1': taskone.outputs['task1_outputs']
+            'input_1': stepone.outputs['task1_outputs']
         },
         packages_to_install = config.Dependencies.task_two,
     )
 
     with builder.condition(
-        tasktwo.outputs['flag_output'], '==', 'True',
+        steptwo.outputs['flag_output'], '==', 'True',
         name = config.ConditionNames.condition1
     ):
-        taskthree = builder.add_step(
+        stepthree = builder.add_step(
             name = config.TaskNames.task_three,
             step_type = ComponentType.CUSTOM,
             step_function = task3,
             inputs = {
-                'input_1': tasktwo.outputs['output_string'],
-                'input_2': tasktwo.outputs['output_number']
+                'input_1': steptwo.outputs['output_string'],
+                'input_2': steptwo.outputs['output_number']
             },
             base_image = config.BaseImages.task_three,
             packages_to_install = config.Dependencies.task_three,
         )
 
-        taskfour_true = builder.add_step(
+        stepfour_true = builder.add_step(
             name = config.TaskNames.task_four_true,
             step_type = ComponentType.CUSTOM,
             step_function = task4,
-            after = [taskthree],
+            after = [stepthree],
             vertex_custom_job_spec = {
                 'machine_type': config.ComputeResources.task_four,
                 'service_account': config.PipelineConfig.SERVICE_ACCOUNT
@@ -68,10 +68,10 @@ def build_pipeline():
         )
 
     with builder.condition(
-        tasktwo.outputs['flag_output'], '==', 'False',
+        steptwo.outputs['flag_output'], '==', 'False',
         name = config.ConditionNames.condition2
     ):
-        taskfour_false = builder.add_step(
+        stepfour_false = builder.add_step(
             name = config.TaskNames.task_four_false,
             step_type = ComponentType.CUSTOM,
             step_function = task4
@@ -82,6 +82,32 @@ def build_pipeline():
         step_type = ComponentType.CUSTOM_METRIC_MONITORER,
         step_function = data_drift_dummy, 
         metric_metadata = config.LiteralInputs.metric_metadata,
+    )
+
+    upload_task = builder.add_step(
+        name = 'upload-dummy-model',
+        step_type = ComponentType.MODEL_UPLOAD,
+        inputs = ModelUploadConfig(
+            model_display_name = 'my-dummy-sklearn-model',
+            gcs_model_artifact_uri = 'gs://test-bucket-development/models/dummy_sklearn_model',
+            serving_container_image_uri = 'asia-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-5:latest',
+        ),
+        vertex_custom_job_spec = {
+            'machine_type': config.ComputeResources.task_four,
+            'service_account': config.PipelineConfig.SERVICE_ACCOUNT
+        }
+    )
+
+    predict_task = builder.add_step(
+        name = 'run-batch-prediction',
+        step_type = ComponentType.BATCH_PREDICT,
+        inputs = BatchPredictionConfig(
+            job_display_name = 'prediction-on-dummy-data',
+            model_resource_name = upload_task.outputs['model_resource_name'],
+            instances_format = 'jsonl',
+            gcs_source_uris = ['gs://test-bucket-development/data/dummy_prediction_data.jsonl'],
+            gcs_destination_output_uri_prefix = 'gs://test-bucket-development/inference-data/'
+        )
     )
 
     return builder

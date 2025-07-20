@@ -5,6 +5,7 @@ This module contains the primary user-facing API for constructing pipelines:
   It is a high-level interface for users to build a pipeline graph without writing any KFP DSL code.
 """
 import operator
+import dataclasses
 
 from typing import Any, Callable, Dict, List, Optional
 
@@ -15,8 +16,10 @@ from google_cloud_pipeline_components.v1.vertex_notification_email import Vertex
 from google_cloud_pipeline_components.v1.custom_job import create_custom_training_job_from_component
 
 from .component_builder import ComponentCreator, CustomComponent
-from ..components import model_upload_step, batch_prediction_step
+from ..components.model_upload_step import model_upload_step
+from ..components.batch_prediction_step import batch_prediction_step
 from ..components.custom_metric_monitorer_step import custom_metric_monitorer_step
+from ..utils.component_configs import ModelUploadConfig, BatchPredictionConfig
 
 from ..utils.enums import ComponentType
 
@@ -237,10 +240,10 @@ class PipelineBuilder:
 
             else:
                 return kfp_component_object
-        # elif step_type == ComponentType.MODEL_UPLOAD:
-        #     step_object = model_upload_step.ModelUploadStep(**kwargs)
-        # elif step_type == ComponentType.BATCH_PREDICT:
-        #     step_object = batch_prediction_step.BatchPredictionStep(**kwargs)
+        elif step_type == ComponentType.MODEL_UPLOAD:
+            return CustomComponent(kfp_component_function = model_upload_step)
+        elif step_type == ComponentType.BATCH_PREDICT:
+            return CustomComponent(kfp_component_function = batch_prediction_step)
         else:
             raise NotImplementedError(f'Invalid step type {step_type} received.')
 
@@ -302,13 +305,22 @@ class PipelineBuilder:
                             step_obj = self._get_step_object(step_definition, common_base_image)
 
                             resolved_inputs = {}
-                            for key, value in step_definition['inputs'].items():
+
+                            inputs_data = step_definition.get('inputs', {})
+                            if dataclasses.is_dataclass(inputs_data):
+                                inputs_dict = {
+                                    k: v for k, v in dataclasses.asdict(inputs_data).items() if v is not None
+                                }                            
+                            else:
+                                inputs_dict = inputs_data
+
+                            for key, value in inputs_dict.items():
                                 resolved_value = self._resolve_placeholders(value, pipeline_tasks, runtime_parameters)
                                 resolved_inputs[key] = resolved_value
                             
-                            # if step_definition['step_type'] not in [ComponentType.CUSTOM, ComponentType.CUSTOM_METRIC_MONITORER]:
-                            #     resolved_inputs['project'] = project_id
-                            #     resolved_inputs['location'] = location
+                            if step_definition['step_type'] in [ComponentType.MODEL_UPLOAD, ComponentType.BATCH_PREDICT]:
+                                resolved_inputs['project'] = project_id
+                                resolved_inputs['location'] = location
                             
                             pipeline_task = step_obj.execute(**resolved_inputs)
                             pipeline_task.set_display_name(step_name)

@@ -6,6 +6,7 @@ import importlib.metadata
 from .core.pipeline_builder import PipelineBuilder, Task
 from .core.runner import PipelineRunner
 from .core.image_builder import CustomImageConfig
+from .utils.component_configs import ModelUploadConfig, BatchPredictionConfig
 # from .serving.container_builder import ServingContainerBuilder
 from .utils.enums import ComponentType
 
@@ -21,5 +22,7 @@ __all__ = [
     # 'ServingContainerBuilder',
     'ComponentType',
     'CustomImageConfig',
+    'ModelUploadConfig',
+    'BatchPredictionConfig',
     '__version__',
 ]
