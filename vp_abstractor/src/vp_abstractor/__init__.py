@@ -5,13 +5,11 @@ import importlib.metadata
 
 from .core.pipeline_builder import PipelineBuilder, Task
 from .core.runner import PipelineRunner
-from .core.image_builder import CustomImageConfig
-from .utils.component_configs import ModelUploadConfig, BatchPredictionConfig
-# from .serving.container_builder import ServingContainerBuilder
+from .utils.dataclasses import ModelUploadConfig, BatchPredictionConfig, ServingImageConfig, CustomImageConfig
 from .utils.enums import ComponentType
 
 try:
-    __version__ = importlib.metadata.version('vp_abstractor')
+    __version__ = importlib.metadata.version('vp-abstractor')
 except:
     __version__ = 'dev'
 
@@ -19,7 +17,7 @@ __all__ = [
     'PipelineBuilder',
     'Task',
     'PipelineRunner',
-    # 'ServingContainerBuilder',
+    'ServingImageConfig',
     'ComponentType',
     'CustomImageConfig',
     'ModelUploadConfig',

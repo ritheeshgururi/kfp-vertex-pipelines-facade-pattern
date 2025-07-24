@@ -9,10 +9,11 @@ import tempfile
 from google.cloud import aiplatform
 from kfp.compiler import Compiler
 
-#importing only for type annotations
-from .image_builder import CustomImageConfig, ImageBuilder
+from .image_builders import CustomImageConfig, ComponentImageBuilder, ServingImageBuilder
 from . import pipeline_builder
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
+from ..utils.dataclasses import ServingImageConfig
 
 logging.basicConfig(
     level = logging.INFO,
@@ -30,6 +31,7 @@ class PipelineRunner:
         location: str,
         enable_caching: bool = False,
         custom_base_image_config: Optional[CustomImageConfig] = None,
+        serving_image_configs: Optional[List[ServingImageConfig]] = None,
     ):
         """
         Initializes the PipelineRunner and the Vertex AI client.
@@ -49,6 +51,7 @@ class PipelineRunner:
         self.location = location
         self.enable_caching = enable_caching
         self.custom_base_image_config = custom_base_image_config
+        self.serving_image_configs = serving_image_configs
 
         aiplatform.init(
             project = self.project_id,
@@ -81,24 +84,37 @@ class PipelineRunner:
         display_name = pipeline_builder.pipeline_name
         pipeline_root = pipeline_builder.pipeline_root
 
+        built_serving_images: Dict[str, str] = {}
+        if self.serving_image_configs:
+            logger.info(f'{len(self.serving_image_configs)} serving image configuration provided. Starting serving image builder.') if len(self.serving_image_configs) == 1 else logger.info(f'{len(self.serving_image_configs)} serving image configurations provided. Starting serving image builders.')
+            for config in self.serving_image_configs:
+                if not isinstance(config, ServingImageConfig):
+                    raise TypeError(f'Items in serving_image_configs must be of type ServingImageConfig. Instead recieved {type(config)}')
+                
+                serving_builder = ServingImageBuilder(config)
+                image_uri = serving_builder.build_and_push(force_rebuild = force_image_rebuild)
+                built_serving_images[config.config_name] = image_uri
+                logger.info(f"Built serving image '{config.config_name}': {image_uri}")
+
         common_base_image = None
         if self.custom_base_image_config:
-            logger.info('Custom common base image configuration provided. Starting image builder')
-            image_builder = ImageBuilder(self.custom_base_image_config)
+            logger.info('Custom common base image configuration provided. Starting component base image builder')
+            image_builder = ComponentImageBuilder(self.custom_base_image_config)
             common_base_image = image_builder.build_and_push(force_rebuild = force_image_rebuild)
             logger.info(f'Using custom base image for pipeline: {common_base_image}')
 
         logger.info('Building KFP pipeline function from the builder definition')
         kfp_pipeline_function = pipeline_builder._build_kfp_pipeline(
             runtime_parameters = pipeline_params,
-            common_base_image = common_base_image
+            common_base_image = common_base_image,
+            built_serving_images = built_serving_images
         )
 
         with tempfile.NamedTemporaryFile(mode = 'w', suffix = '.yaml', delete = True) as temp_file:
             compiler = Compiler()
             logger.info(f'Compiling pipeline {display_name} to YAML')
             compiler.compile(
-                pipeline_func = kfp_pipeline_function, #type: ignore
+                pipeline_func = kfp_pipeline_function,#type: ignore
                 package_path = temp_file.name
             )
             logger.info(f'Pipeline compiled successfully.')

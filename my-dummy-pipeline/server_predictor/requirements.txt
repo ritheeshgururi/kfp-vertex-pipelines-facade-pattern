@@ -1,0 +1,4 @@
+scikit-learn
+joblib
+google-cloud-storage
+#vp_abstractor

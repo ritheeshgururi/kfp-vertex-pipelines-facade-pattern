@@ -6,7 +6,7 @@ from src.tasks.data_drift_dummy import data_drift_dummy
 
 import config as config
 
-from vp_abstractor import PipelineBuilder, PipelineRunner, ComponentType, CustomImageConfig, ModelUploadConfig, BatchPredictionConfig
+from vp_abstractor import PipelineBuilder, PipelineRunner, ComponentType, CustomImageConfig, ModelUploadConfig, BatchPredictionConfig, ServingImageConfig
 
 def build_pipeline():
     builder = PipelineBuilder(
@@ -37,7 +37,7 @@ def build_pipeline():
         inputs = {
             'input_1': stepone.outputs['task1_outputs']
         },
-        packages_to_install = config.Dependencies.task_two,
+        packages_to_install = config.Dependencies.task_two
     )
 
     with builder.condition(
@@ -53,7 +53,7 @@ def build_pipeline():
                 'input_2': steptwo.outputs['output_number']
             },
             base_image = config.BaseImages.task_three,
-            packages_to_install = config.Dependencies.task_three,
+            packages_to_install = config.Dependencies.task_three
         )
 
         stepfour_true = builder.add_step(
@@ -77,20 +77,20 @@ def build_pipeline():
             step_function = task4
         )
 
-    builder.add_step(
+    monitoring_task = builder.add_step(
         name = config.TaskNames.data_drift_dummy,
         step_type = ComponentType.CUSTOM_METRIC_MONITORER,
         step_function = data_drift_dummy, 
-        metric_metadata = config.LiteralInputs.metric_metadata,
+        metric_metadata = config.LiteralInputs.metric_metadata
     )
 
-    upload_task = builder.add_step(
-        name = 'upload-dummy-model',
+    model_upload_task = builder.add_step(
+        name = config.TaskNames.model_upload_task,
         step_type = ComponentType.MODEL_UPLOAD,
-        inputs = ModelUploadConfig(
-            model_display_name = 'my-dummy-sklearn-model',
-            gcs_model_artifact_uri = 'gs://test-bucket-development/models/dummy_sklearn_model',
-            serving_container_image_uri = 'asia-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-5:latest',
+        inputs = ModelUploadConfig(#type: ignore
+            display_name = config.ModelUpload.model_display_name,
+            artifact_uri = config.ModelUpload.gcs_model_artifact_uri,
+            serving_container_image_uri = builder.images[config.ServingImage.CONFIG_NAME],#type: ignore
         ),
         vertex_custom_job_spec = {
             'machine_type': config.ComputeResources.task_four,
@@ -98,15 +98,15 @@ def build_pipeline():
         }
     )
 
-    predict_task = builder.add_step(
-        name = 'run-batch-prediction',
+    batch_predict_task = builder.add_step(
+        name = config.TaskNames.batch_predict_task,
         step_type = ComponentType.BATCH_PREDICT,
-        inputs = BatchPredictionConfig(
-            job_display_name = 'prediction-on-dummy-data',
-            model_resource_name = upload_task.outputs['model_resource_name'],
-            instances_format = 'jsonl',
-            gcs_source_uris = ['gs://test-bucket-development/data/dummy_prediction_data.jsonl'],
-            gcs_destination_output_uri_prefix = 'gs://test-bucket-development/inference-data/'
+        inputs = BatchPredictionConfig(#type: ignore
+            job_display_name = config.VertexBatchPrediction.job_display_name,
+            model_resource_name = model_upload_task.outputs['model_resource_name'],
+            instances_format = config.VertexBatchPrediction.instances_format,
+            gcs_source_uris = config.VertexBatchPrediction.gcs_source_uris,
+            gcs_destination_prefix = config.VertexBatchPrediction.gcs_destination_output_uri_prefix
         )
     )
 
@@ -123,7 +123,16 @@ def main():
             artifact_registry_repo = config.BaseImageConfig.artifact_registry_repo,
             image_name = config.BaseImageConfig.image_name,
             requirements_file = config.BaseImageConfig.requirements_file
-        )
+        ),
+        serving_image_configs = [ServingImageConfig(
+            config_name = config.ServingImage.CONFIG_NAME,
+            src_dir = config.ServingImage.SRC_DIR,
+            artifact_registry_repo = config.ServingImage.ARTIFACT_REGISTRY_REPO,
+            image_name = config.ServingImage.IMAGE_NAME,
+            prediction_script = config.ServingImage.PREDICTION_SCRIPT,
+            prediction_class = config.ServingImage.PREDICTION_CLASS,
+            requirements_file = config.ServingImage.REQUIREMENTS_FILE
+        )]
     )
 
     builder = build_pipeline()

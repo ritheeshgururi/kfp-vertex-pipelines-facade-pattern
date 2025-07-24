@@ -19,13 +19,13 @@ from .component_builder import ComponentCreator, CustomComponent
 from ..components.model_upload_step import model_upload_step
 from ..components.batch_prediction_step import batch_prediction_step
 from ..components.custom_metric_monitorer_step import custom_metric_monitorer_step
-from ..utils.component_configs import ModelUploadConfig, BatchPredictionConfig
 
 from ..utils.enums import ComponentType
 
 
 class _Placeholder:
-    """[Internal] Represents a placeholder for task outputs and pipeline parameters that will be resolved later."""
+    """[Internal] Represents a placeholder for task outputs, pipeline parameters and serving image URIs that will be resolved later.
+    """
     def __init__(self, pattern: str):
         self.pattern = pattern
 
@@ -57,14 +57,21 @@ class Task:
         return f"Task(name='{self.name}')"
 
 class _PipelineParameters:
-    """
-    [Internal] A dictionary-like object that generates placeholders for runtime parameters. This enables users to write `builder.parameters['pipeline_parameter']`.
+    """[Internal] A dictionary-like object that generates placeholders for runtime parameters. This enables users to write `builder.parameters['pipeline_parameter']`.
     """
     def __getitem__(self, key: str) -> _Placeholder:
         return _Placeholder(f'{{{{params.{key}}}}}')
     
+class _ServingImages:
+    """[Internal] A dictionary-like object for serving image URI placeholders.
+    """
+    def __getitem__(self, key: str) -> _Placeholder:
+        """Returns a placeholder for a specific serving image URI."""
+        return _Placeholder(f'{{{{images.{key}}}}}')
+    
 class _ConditionGroup:
-    """[Internal] Represents an if block in the pipeline graph."""
+    """[Internal] Represents an if block in the pipeline graph.
+    """
     def __init__(
         self,
         lhs_operand: Any,
@@ -81,8 +88,7 @@ class _ConditionGroup:
         self.steps: List[Dict[str, Any]] = []
 
 class PipelineBuilder:
-    """
-    User facig API for programmatically defining a Vertex Pipeline graph.
+    """User facig API for programmatically defining a Vertex Pipeline graph.
     """    
     def __init__(
         self,
@@ -102,6 +108,7 @@ class PipelineBuilder:
         self.pipeline_root = pipeline_root
         self.description = description
         self.parameters = _PipelineParameters()
+        self.images = _ServingImages()
         self._pipeline_graph: List[Any] = [] 
         self._active_condition_group: Optional[_ConditionGroup] = None
         self._exit_notification_recipients: Optional[List[str]] = None
@@ -209,7 +216,8 @@ class PipelineBuilder:
         step_definition: Dict[str, Any],
         common_base_image: Optional[str] = None
     ):
-        """Creates KFP component objects using the component builder. Wraps them into Vertex AI Custom Jobs if `vertex_custom_job_spec` is specified."""
+        """Creates KFP component objects using the component builder. Wraps them into Vertex AI Custom Jobs if `vertex_custom_job_spec` is specified.
+        """
         step_type = step_definition['step_type']
         kwargs = step_definition['kwargs']
 
@@ -251,9 +259,11 @@ class PipelineBuilder:
         self,
         value: Any,
         pipeline_tasks: Dict[str, dsl.PipelineTask],
-        pipeline_params: Dict[str, Any]
+        pipeline_params: Dict[str, Any],
+        built_serving_images: Optional[Dict[str, str]] = None
     ) -> Any:
-        """[Internal] Resolves placeholder objects/strings into KFP artifacts or pipeline parameters."""
+        """[Internal] Resolves placeholder objects/strings into KFP artifacts or pipeline parameters.
+        """
         if not isinstance(value, (str, _Placeholder)):
             return value
 
@@ -270,14 +280,22 @@ class PipelineBuilder:
         if param_match:
             param_key = param_match.group(1)
             if param_key not in pipeline_params:
-                raise ValueError(f"Runtime parameter '{param_key}' not provided.")            
+                raise ValueError(f'Runtime parameter {param_key} not provided.')            
             return pipeline_params[param_key]
+        
+        serving_image_match = re.match(r'^{{images.([\w-]+)}}$', placeholder_str)
+        if serving_image_match:
+            image_key = serving_image_match.group(1)
+            if built_serving_images and image_key in built_serving_images:
+                return built_serving_images[image_key]
+            raise ValueError(f'Serving image with config_name {image_key} was defined in the pipeline but the corresponding ServingImageConfig was not provided to the PipelineRunner.')
 
         return value
 
     def _build_kfp_pipeline(
         self,
         runtime_parameters: Dict[str, Any],
+        built_serving_images: Optional[Dict[str, str]] = None,
         common_base_image: Optional[str] = None
     ):
         """
@@ -296,6 +314,7 @@ class PipelineBuilder:
 
                 def _process_graph_level(
                     graph_level: List[Any],
+                    built_serving_images_map: Optional[Dict[str, str]] = None,
                     global_base_image: Optional[str] = None
                 ):
                     for task_group in graph_level:
@@ -309,13 +328,18 @@ class PipelineBuilder:
                             inputs_data = step_definition.get('inputs', {})
                             if dataclasses.is_dataclass(inputs_data):
                                 inputs_dict = {
-                                    k: v for k, v in dataclasses.asdict(inputs_data).items() if v is not None
+                                    k: v for k, v in dataclasses.asdict(inputs_data).items() if v is not None#type: ignore
                                 }                            
                             else:
                                 inputs_dict = inputs_data
 
                             for key, value in inputs_dict.items():
-                                resolved_value = self._resolve_placeholders(value, pipeline_tasks, runtime_parameters)
+                                resolved_value = self._resolve_placeholders(
+                                    value,
+                                    pipeline_tasks,
+                                    runtime_parameters,
+                                    built_serving_images = built_serving_images_map
+                                )
                                 resolved_inputs[key] = resolved_value
                             
                             if step_definition['step_type'] in [ComponentType.MODEL_UPLOAD, ComponentType.BATCH_PREDICT]:
@@ -336,11 +360,11 @@ class PipelineBuilder:
 
                                 custom_metric_monitorer_task = custom_metric_monitorer_step(
                                     project_id = project_id,
-                                    metrics = metric_dict_output, #type: ignore
+                                    metrics = metric_dict_output,#type: ignore
                                     metadata = step_definition['metric_metadata'],
                                     metric_type_name = metric_type_name
                                 )
-                                custom_metric_monitorer_task.set_display_name(f'{step_name}-monitorer') #type: ignore
+                                custom_metric_monitorer_task.set_display_name(f'{step_name}-monitorer')#type: ignore
 
                             for dep_task in step_definition['after']:
                                 pipeline_task.after(pipeline_tasks[dep_task.name])
@@ -349,7 +373,10 @@ class PipelineBuilder:
                             condition_group = task_group
                             
                             resolved_lhs_operand = self._resolve_placeholders(
-                                condition_group.lhs_operand, pipeline_tasks, runtime_parameters
+                                condition_group.lhs_operand,
+                                pipeline_tasks,
+                                runtime_parameters,
+                                built_serving_images = built_serving_images_map                            
                             )
 
                             op_function = operator_map[condition_group.operation]
@@ -357,9 +384,17 @@ class PipelineBuilder:
                             kfp_condition = op_function(resolved_lhs_operand, condition_group.rhs_operand)
 
                             with dsl.If(kfp_condition, name = condition_group.name):
-                                _process_graph_level(condition_group.steps, global_base_image)
+                                _process_graph_level(
+                                    graph_level = condition_group.steps,
+                                    built_serving_images_map = built_serving_images_map,
+                                    global_base_image = global_base_image
+                                )
 
-                _process_graph_level(self._pipeline_graph, common_base_image)
+                _process_graph_level(
+                    graph_level = self._pipeline_graph,
+                    built_serving_images_map = built_serving_images,
+                    global_base_image = common_base_image
+                )
 
             if self._exit_notification_recipients:
                 with dsl.ExitHandler(
