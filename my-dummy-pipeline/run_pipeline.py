@@ -106,7 +106,8 @@ def build_pipeline():
             model_resource_name = model_upload_task.outputs['model_resource_name'],
             instances_format = config.VertexBatchPrediction.instances_format,
             gcs_source_uris = config.VertexBatchPrediction.gcs_source_uris,
-            gcs_destination_prefix = config.VertexBatchPrediction.gcs_destination_output_uri_prefix
+            gcs_destination_prefix = config.VertexBatchPrediction.gcs_destination_output_uri_prefix,
+            predictions_format = 'jsonl'
         )
     )
 
@@ -143,6 +144,14 @@ def main():
         service_account = config.PipelineConfig.SERVICE_ACCOUNT,
         force_image_rebuild = config.PipelineConfig.force_image_rebuild
     )
+
+    # runner.schedule(
+    #     pipeline_builder = builder,
+    #     schedule_display_name = f'{config.PipelineConfig.PIPELINE_NAME}-hourly-schedule',
+    #     cron = '0 * * * *',
+    #     service_account = config.PipelineConfig.SERVICE_ACCOUNT,
+    #     force_image_rebuild = config.PipelineConfig.force_image_rebuild
+    # )
 
 if __name__ == '__main__':
     main()

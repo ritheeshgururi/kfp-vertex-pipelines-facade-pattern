@@ -5,13 +5,14 @@ definition created by the PipelineBuilder and the Vertex Pipeline service.
 """
 import logging
 import tempfile
+import os
 
 from google.cloud import aiplatform
 from kfp.compiler import Compiler
 
 from .image_builders import CustomImageConfig, ComponentImageBuilder, ServingImageBuilder
 from . import pipeline_builder
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from ..utils.dataclasses import ServingImageConfig
 
@@ -59,6 +60,71 @@ class PipelineRunner:
         )
         logger.info(f'Vertex AI initialized for project {self.project_id} and location {self.location}.')
 
+    def _compile_and_prepare_job(
+        self,
+        pipeline_builder: pipeline_builder.PipelineBuilder,
+        pipeline_parameters: Optional[Dict[str, Any]] = None,
+        force_image_rebuild: Optional[bool] = False
+    ) -> Tuple[aiplatform.PipelineJob, str]:
+        """
+        [Internal] Builds images, compiles the pipeline, and returns a configured PipelineJob object.
+        """
+        pipeline_params = pipeline_parameters or {}
+        display_name = pipeline_builder.pipeline_name
+        pipeline_root = pipeline_builder.pipeline_root
+
+        built_serving_images: Dict[str, str] = {}
+        if self.serving_image_configs:
+            logger.info(f'{len(self.serving_image_configs)} serving image configuration provided. Starting serving image builder.') if len(self.serving_image_configs) == 1 else logger.info(f'{len(self.serving_image_configs)} serving image configurations provided. Starting serving image builders.')
+            for config in self.serving_image_configs:
+                if not isinstance(config, ServingImageConfig):
+                    raise TypeError(f'Items in serving_image_configs must be of type ServingImageConfig. Instead recieved {type(config)}')
+                
+                serving_builder = ServingImageBuilder(config)
+                image_uri = serving_builder.build_and_push(force_rebuild=force_image_rebuild)
+                built_serving_images[config.config_name] = image_uri
+                logger.info(f"Built serving image '{config.config_name}': {image_uri}")
+
+        common_base_image = None
+        if self.custom_base_image_config:
+            logger.info('Custom common base image configuration provided. Starting component base image builder')
+            image_builder = ComponentImageBuilder(self.custom_base_image_config)
+            common_base_image = image_builder.build_and_push(force_rebuild=force_image_rebuild)
+            logger.info(f'Using custom base image for pipeline: {common_base_image}')
+
+        logger.info('Building KFP pipeline function from the builder definition')
+        kfp_pipeline_function = pipeline_builder._build_kfp_pipeline(
+            runtime_parameters = pipeline_params,
+            common_base_image = common_base_image,
+            built_serving_images = built_serving_images
+        )
+
+        temp_file = tempfile.NamedTemporaryFile(mode = 'w', suffix = '.yaml', delete = False)
+        temp_file_path = temp_file.name
+
+        with temp_file:
+            compiler = Compiler()
+            logger.info(f'Compiling pipeline {display_name} to YAML')
+            compiler.compile(
+                pipeline_func = kfp_pipeline_function,#type: ignore
+                package_path = temp_file.name
+            )
+            logger.info(f'Pipeline compiled successfully to {temp_file.name}.')
+
+            job = aiplatform.PipelineJob(
+                display_name = display_name,
+                template_path = temp_file.name,
+                pipeline_root = pipeline_root,
+                parameter_values = {
+                    'project_id': self.project_id,
+                    'location': self.location,
+                    **pipeline_params
+                },
+                enable_caching = self.enable_caching,
+            )
+        
+        return job, temp_file_path
+
     def run(
         self,
         pipeline_builder: pipeline_builder.PipelineBuilder,
@@ -79,71 +145,82 @@ class PipelineRunner:
 
         Returns:
             An `aiplatform.PipelineJob` object representing the running or completed job.
-        """        
-        pipeline_params = pipeline_parameters or {}
-        display_name = pipeline_builder.pipeline_name
-        pipeline_root = pipeline_builder.pipeline_root
+        """       
+        job, temp_path = self._compile_and_prepare_job(
+            pipeline_builder = pipeline_builder,
+            pipeline_parameters = pipeline_parameters,
+            force_image_rebuild = force_image_rebuild
+        )
+        
+        try:
+            logger.info('Submitting Vertex AI PipelineJob for a single run.')
+            job.submit(service_account = service_account)
+            logger.info(f'Vertex AI PipelineJob submitted successfully')
 
-        built_serving_images: Dict[str, str] = {}
-        if self.serving_image_configs:
-            logger.info(f'{len(self.serving_image_configs)} serving image configuration provided. Starting serving image builder.') if len(self.serving_image_configs) == 1 else logger.info(f'{len(self.serving_image_configs)} serving image configurations provided. Starting serving image builders.')
-            for config in self.serving_image_configs:
-                if not isinstance(config, ServingImageConfig):
-                    raise TypeError(f'Items in serving_image_configs must be of type ServingImageConfig. Instead recieved {type(config)}')
-                
-                serving_builder = ServingImageBuilder(config)
-                image_uri = serving_builder.build_and_push(force_rebuild = force_image_rebuild)
-                built_serving_images[config.config_name] = image_uri
-                logger.info(f"Built serving image '{config.config_name}': {image_uri}")
+            if wait:
+                try:
+                    job.wait()
+                    logger.info(f'Pipeline job {job.display_name} finished')
+                except Exception as e:
+                    logger.error(f'Pipeline job failed with an exception: {e}')
+                    raise
+        finally:
+            logger.info(f'Deleting temporary pipeline definition file: {temp_path}')
+            os.remove(temp_path)        
+        return job
+    
+    def schedule(
+        self,
+        pipeline_builder: pipeline_builder.PipelineBuilder,
+        schedule_display_name: str,
+        cron: str,
+        pipeline_parameters: Optional[Dict[str, Any]] = None,
+        service_account: Optional[str] = None,
+        max_concurrent_run_count: int = 1,
+        max_run_count: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        force_image_rebuild: Optional[bool] = False
+    ) -> aiplatform.PipelineJobSchedule:
+        """
+        Compiles the pipeline and creates a recurring schedule on Vertex AI.
 
-        common_base_image = None
-        if self.custom_base_image_config:
-            logger.info('Custom common base image configuration provided. Starting component base image builder')
-            image_builder = ComponentImageBuilder(self.custom_base_image_config)
-            common_base_image = image_builder.build_and_push(force_rebuild = force_image_rebuild)
-            logger.info(f'Using custom base image for pipeline: {common_base_image}')
+        Args:
+            pipeline_builder: The PipelineBuilder instance containing the full pipeline definition.
+            schedule_display_name: The display name for the created schedule in Vertex AI.
+            cron: The cron schedule string (e.g., "0 2 * * *"). Timezone can be specified, e.g., "TZ=America/New_York 0 2 * * *".
+            pipeline_parameters: Optional. A dictionary of runtime parameters for the pipeline runs.
+            service_account: Optional. Service account to be used for the scheduled PipelineJob runs.
+            max_concurrent_run_count: The maximum number of concurrent runs. Defaults to 1.
+            max_run_count: Optional. The maximum number of runs for this schedule.
+            start_time: Optional. The start time of the schedule in RFC3339 format (e.g., "2023-01-01T00:00:00Z").
+            end_time: Optional. The end time of the schedule in RFC3339 format.
+            force_image_rebuild: Optional. If True, forces a rebuild of component/serving images.
 
-        logger.info('Building KFP pipeline function from the builder definition')
-        kfp_pipeline_function = pipeline_builder._build_kfp_pipeline(
-            runtime_parameters = pipeline_params,
-            common_base_image = common_base_image,
-            built_serving_images = built_serving_images
+        Returns:
+            An `aiplatform.PipelineJobSchedule` object representing the created schedule.
+        """
+        job, temp_path = self._compile_and_prepare_job(
+            pipeline_builder=pipeline_builder,
+            pipeline_parameters=pipeline_parameters,
+            force_image_rebuild=force_image_rebuild
         )
 
-        with tempfile.NamedTemporaryFile(mode = 'w', suffix = '.yaml', delete = True) as temp_file:
-            compiler = Compiler()
-            logger.info(f'Compiling pipeline {display_name} to YAML')
-            compiler.compile(
-                pipeline_func = kfp_pipeline_function,#type: ignore
-                package_path = temp_file.name
-            )
-            logger.info(f'Pipeline compiled successfully.')
+        try:
+            logger.info(f"Creating a new schedule '{schedule_display_name}' with cron trigger: '{cron}'")
 
-            job = aiplatform.PipelineJob(
-                display_name = display_name,
-                template_path = temp_file.name,
-                pipeline_root = pipeline_root,
-                parameter_values = {
-                    'project_id': self.project_id,
-                    'location': self.location,
-                    **pipeline_params
-                },
-                enable_caching = self.enable_caching,
+            schedule = job.create_schedule(
+                display_name=schedule_display_name,
+                cron=cron,
+                max_concurrent_run_count=max_concurrent_run_count,
+                max_run_count=max_run_count,
+                start_time=start_time,
+                end_time=end_time,
+                service_account=service_account
             )
 
-            logger.info(f'Submitting Vertex AI PipelineJob to Vertex Pipelines')
-            job.submit(
-                service_account = service_account
-            )
-
-        logger.info(f'Vertex AI PipelineJob submitted successfully')
-
-        if wait:
-            try:
-                job.wait()
-                logger.info(f'Pipeline job {display_name} finished')
-            except Exception as e:
-                logger.info(f'Pipeline job failed with an exception: {e}')
-                raise
-        
-        return job
+            logger.info(f"Schedule '{schedule.display_name}' created successfully.")
+            return schedule
+        finally:
+            logger.info(f'Deleting temporary pipeline definition file: {temp_path}')
+            os.remove(temp_path)

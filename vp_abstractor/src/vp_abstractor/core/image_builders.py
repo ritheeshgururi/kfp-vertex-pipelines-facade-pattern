@@ -199,8 +199,6 @@ class ServingImageBuilder(_BaseImageBuilder):
             fastapi_server_template_path = p
         shutil.copy(fastapi_server_template_path, os.path.join(temp_build_context_path, 'main.py'))
 
-        shutil.copy(fastapi_server_template_path, os.path.join(temp_build_context_path, 'main.py'))
-
         return temp_build_context_path
     
     def _generate_dockerfile_content(self) -> str:

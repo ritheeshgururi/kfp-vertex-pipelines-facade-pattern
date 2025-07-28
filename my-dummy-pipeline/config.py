@@ -75,7 +75,7 @@ class VertexBatchPrediction:
 
 class BaseImageConfig:
     python_base_image = 'python:3.10-slim-bookworm'
-    requirements_file = 'requirements/requirements.txt'
+    requirements_file = 'requirements.txt'
     src_dir = 'src'
     artifact_registry_repo = 'asia-south1-docker.pkg.dev/gcp-vertexai-mlops-blueprint/gcp-vertex-ai-mlops-blueprint'
     image_name = 'vp_abstractor-test-image'
@@ -87,4 +87,4 @@ class ServingImage:
     IMAGE_NAME = 'dummy-sklearn-server'
     PREDICTION_SCRIPT = 'predictor.py'
     PREDICTION_CLASS = 'MyPredictor'
-    REQUIREMENTS_FILE = 'requirements/requirements.txt'
+    REQUIREMENTS_FILE = 'requirements.txt'

@@ -22,6 +22,7 @@ class BatchPredictionConfig:
     machine_type: str = 'n1-standard-2'
     starting_replica_count: int = 1
     max_replica_count: int = 1
+    predictions_format:str = 'jsonl'
 
 @dataclass
 class CustomImageConfig:

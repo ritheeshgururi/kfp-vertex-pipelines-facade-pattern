@@ -60,6 +60,19 @@ def custom_metric_monitorer_step(
             time_series = combined_metrics_timeseries
         )
         print('All metrics logged to Cloud Monitoring successfully.')
+
+        metrics_explorer_link = f'https://console.cloud.google.com/monitoring/metrics-explorer?project={project_id}'
+
+        print('\n--- Logging Summary ---')
+        print(f'Project ID:      {project_id}')
+        print(f'Metric Type:     {metric_type_name}')
+        print(f'Common Labels:   {metadata}')
+        print('Metrics Sent:')
+        
+        for name, value in metrics.items():
+            print(f'  - {name}: {value}')
+        print(f'\nView in Metrics Explorer: {metrics_explorer_link}')
+        print('-----------------------\n')
     except Exception as e:
-        print(f'Logging metrics to Cloud Monitoring failer with error: {e}')
+        print(f'Logging metrics to Cloud Monitoring failed with error: {e}')
         raise e

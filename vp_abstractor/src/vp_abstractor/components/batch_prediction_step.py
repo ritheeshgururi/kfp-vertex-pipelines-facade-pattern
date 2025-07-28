@@ -13,6 +13,7 @@ def batch_prediction_step(
     gcs_source_uris: List[str],
     gcs_destination_prefix: str,
     instances_format: str,
+    predictions_format: str = 'jsonl',
     machine_type: str = 'n1-standard-2',
     starting_replica_count: int = 1,
     max_replica_count: int = 1,
@@ -53,7 +54,8 @@ def batch_prediction_step(
         machine_type = machine_type,
         starting_replica_count = starting_replica_count,
         max_replica_count = max_replica_count,
-        sync = True
+        sync = True,
+        predictions_format = predictions_format
     )
 
     print('Batch prediction job finished.')
