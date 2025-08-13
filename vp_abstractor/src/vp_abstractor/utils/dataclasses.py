@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import typing
 from typing import Optional, Any, List
 
 @dataclass
@@ -19,10 +20,11 @@ class BatchPredictionConfig:
     instances_format: str
     gcs_source_uris: List[Any]
     gcs_destination_prefix: str
+    batch_size: int = 64
     machine_type: str = 'n1-standard-2'
     starting_replica_count: int = 1
     max_replica_count: int = 1
-    predictions_format:str = 'jsonl'
+    predictions_format: str = 'jsonl'
 
 @dataclass
 class CustomImageConfig:

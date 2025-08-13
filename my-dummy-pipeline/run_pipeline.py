@@ -3,6 +3,7 @@ from src.tasks.task2 import task2
 from src.tasks.task3 import task3
 from src.tasks.task4 import task4
 from src.tasks.data_drift_dummy import data_drift_dummy
+from src.tasks.vertex_monitoring import create_model_monitoring_job
 
 import config as config
 
@@ -107,8 +108,29 @@ def build_pipeline():
             instances_format = config.VertexBatchPrediction.instances_format,
             gcs_source_uris = config.VertexBatchPrediction.gcs_source_uris,
             gcs_destination_prefix = config.VertexBatchPrediction.gcs_destination_output_uri_prefix,
-            predictions_format = 'jsonl'
+            batch_size = 8
         )
+    )
+
+    vertex_model_monitoring_task = builder.add_step(
+        name = 'dummy-vertex-monitoring',
+        step_type = ComponentType.CUSTOM,
+        step_function = create_model_monitoring_job,
+        inputs = {
+            'project_id': config.PipelineConfig.PROJECT_ID,
+            'location': config.PipelineConfig.LOCATION,
+            'bucket_uri': '',
+            'model_resource_name': model_upload_task.outputs['model_resource_name'],
+            'batch_prediction_job_resource_name': batch_predict_task.outputs['batch_prediction_job_resource_name'],
+            'training_data_gcs_uri': '',
+            'user_emails': config.PipelineConfig.EMAIL_NOTIFICATION_RECIPIENTS,
+            'monitoring_display_name': 'dummy-vertex-monitoring'
+        },
+        packages_to_install =  ['vertexai', 'pandas', 'google-cloud-aiplatform'],
+        vertex_custom_job_spec = {
+            'machine_type': 'e2-standard-8',
+            'service_account': config.PipelineConfig.SERVICE_ACCOUNT
+        }
     )
 
     return builder

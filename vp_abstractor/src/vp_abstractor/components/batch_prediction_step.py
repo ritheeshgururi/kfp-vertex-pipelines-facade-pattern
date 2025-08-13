@@ -13,10 +13,11 @@ def batch_prediction_step(
     gcs_source_uris: List[str],
     gcs_destination_prefix: str,
     instances_format: str,
+    batch_size: int,
     predictions_format: str = 'jsonl',
     machine_type: str = 'n1-standard-2',
     starting_replica_count: int = 1,
-    max_replica_count: int = 1,
+    max_replica_count: int = 1
 ) -> NamedTuple('Outputs', [
     ('gcs_output_directory', str),
     ('batch_prediction_job_resource_name', str),#type: ignore
@@ -55,7 +56,8 @@ def batch_prediction_step(
         starting_replica_count = starting_replica_count,
         max_replica_count = max_replica_count,
         sync = True,
-        predictions_format = predictions_format
+        predictions_format = predictions_format,
+        batch_size = batch_size
     )
 
     print('Batch prediction job finished.')
